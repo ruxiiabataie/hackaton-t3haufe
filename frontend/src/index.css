@@ -1,0 +1,35 @@
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  background-color: #0a0a0a;
+}
+
+body {
+  font-family: 'IBM Plex Mono', monospace;
+  color: white;
+  background-color: #0a0a0a;
+}
+
+* {
+  box-sizing: border-box;
+}
+.replay-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: white;
+  cursor: pointer;
+  border: none;
+}
+
+.replay-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: white;
+  cursor: pointer;
+  border: none;
+}
