@@ -1,7 +1,3 @@
-const fs = require("fs").promises;
-const path = require("path");
-const { exec } = require("child_process");
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -28,7 +24,7 @@ io.on("connection", (socket) => {
 
     if (!rooms[roomId]) {
       rooms[roomId] = {
-        code: "print('Hello Hackathon!')", // Reverted to Python default
+        code: "print('Hello Hackathon! Piston API is working!')",
         users: [],
       };
     }
@@ -55,51 +51,54 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("receive_cursor", { username, position });
   });
 
-  // RUN CODE (Strictly Python 3)
+  // RUN CODE (Using the free Piston API)
   socket.on("run_code", async ({ roomId, code, input }) => {
-    io.to(roomId).emit("code_output", `> Running Python 3 in Docker...\n`);
-
-    const uniqueId = `run_${Date.now()}_${socket.id}`;
-    const runDir = path.join(process.cwd(), uniqueId);
+    io.to(roomId).emit("code_output", `> Sending code to Piston API...\n`);
 
     try {
-      await fs.mkdir(runDir, { recursive: true });
-
-      // Always save as Python
-      const codeFile = "main.py";
-      const inputFile = "input.txt";
-
-      await fs.writeFile(path.join(runDir, codeFile), code);
-      await fs.writeFile(path.join(runDir, inputFile), input || ""); 
-
-      // Hardcoded Python Docker command
-      const cmd = `docker run --rm -v "${runDir}:/app" -w /app python:3.11-slim sh -c "python ${codeFile} < ${inputFile}"`;
-
-      exec(cmd, { timeout: 30000 }, async (error, stdout, stderr) => {
-        let outputMessage = "";
-
-        if (error) {
-          if (error.killed) {
-            outputMessage = `> 🚨 TIMEOUT ERROR: Execution exceeded 30 seconds.\n`;
-            exec(`FOR /F "tokens=*" %i IN ('docker ps -q -f ancestor=python:3.11-slim') DO docker kill %i`);
-          } else {
-            outputMessage = `> ❌ RUNTIME ERROR:\n${stderr || error.message}\n`;
-          }
-        } else {
-          outputMessage = `> STDOUT:\n${stdout}\n`;
-          if (stderr) outputMessage += `> STDERR/WARNINGS:\n${stderr}\n`;
-        }
-
-        outputMessage += `\n> Execution complete 🚀`;
-
-        io.to(roomId).emit("code_output", outputMessage);
-        await fs.rm(runDir, { recursive: true, force: true }).catch(console.error);
+      // We use the native fetch API to send the code to Piston
+      const response = await fetch("https://emkc.org/api/v2/piston/execute", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          language: "python",
+          version: "3.10", // Piston uses Python 3.10
+          files: [
+            {
+              name: "main.py",
+              content: code,
+            },
+          ],
+          stdin: input || "", // Pass the standard input here
+        }),
       });
 
+      const result = await response.json();
+      let outputMessage = "";
+
+      // Handle Piston API specific responses
+      if (result.message) {
+        outputMessage = `> ❌ API ERROR:\n${result.message}\n`;
+      } else if (result.run) {
+        outputMessage = `> STDOUT:\n${result.run.stdout}\n`;
+        if (result.run.stderr) {
+          outputMessage += `> STDERR:\n${result.run.stderr}\n`;
+        }
+        if (result.run.signal === "SIGKILL") {
+          outputMessage += `> 🚨 TIMEOUT ERROR: Execution took too long or crashed.\n`;
+        }
+      } else {
+        outputMessage = `> ❌ UNKNOWN ERROR:\nCould not parse response.\n`;
+      }
+
+      outputMessage += `\n> Execution complete 🚀`;
+      io.to(roomId).emit("code_output", outputMessage);
+
     } catch (err) {
-      console.error("Execution setup error:", err);
-      io.to(roomId).emit("code_output", `> ❌ SERVER ERROR: Could not setup execution environment.\n`);
-      await fs.rm(runDir, { recursive: true, force: true }).catch(() => {});
+      console.error("Piston API error:", err);
+      io.to(roomId).emit("code_output", `> ❌ NETWORK ERROR: Could not reach the execution engine.\n`);
     }
   });
 
@@ -113,6 +112,8 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(5000, () => {
-  console.log("🔥 WebSocket + Python Docker server running on port 5000");
+// Use the environment port if available (Crucial for Railway!)
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`🔥 API-Powered Backend running on port ${PORT}`);
 });
