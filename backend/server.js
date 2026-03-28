@@ -1,10 +1,7 @@
-require("dotenv").config();
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
-const OpenAI = require("openai");
 
 const app = express();
 app.use(cors());
@@ -12,13 +9,7 @@ app.use(cors());
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-  },
-});
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  cors: { origin: "*" },
 });
 
 // room state
@@ -33,24 +24,17 @@ io.on("connection", (socket) => {
 
     if (!rooms[roomId]) {
       rooms[roomId] = {
-        code: "// start coding...",
+        code: "print('Hello Hackathon! Piston API is working!')",
         users: [],
       };
     }
 
-    const exists = rooms[roomId].users.find(
-      (u) => u.id === socket.id
-    );
-
+    const exists = rooms[roomId].users.find((u) => u.id === socket.id);
     if (!exists) {
-      rooms[roomId].users.push({
-        id: socket.id,
-        username,
-      });
+      rooms[roomId].users.push({ id: socket.id, username });
     }
 
     socket.emit("receive_code", rooms[roomId].code);
-
     io.to(roomId).emit("users_update", rooms[roomId].users);
   });
 
@@ -58,81 +42,78 @@ io.on("connection", (socket) => {
   socket.on("send_code", ({ roomId, code }) => {
     if (rooms[roomId]) {
       rooms[roomId].code = code;
-
       socket.to(roomId).emit("receive_code", code);
     }
   });
 
   // MULTI CURSOR
   socket.on("cursor_move", ({ roomId, username, position }) => {
-    socket.to(roomId).emit("receive_cursor", {
-      username,
-      position,
-    });
+    socket.to(roomId).emit("receive_cursor", { username, position });
   });
 
-  // RUN CODE
-  socket.on("run_code", ({ roomId, code }) => {
-    const output = `> Running code...
+  // RUN CODE (Using the free Piston API)
+  socket.on("run_code", async ({ roomId, code, input }) => {
+    io.to(roomId).emit("code_output", `> Sending code to Piston API...\n`);
 
-${code}
+    try {
+      // We use the native fetch API to send the code to Piston
+      const response = await fetch("https://emkc.org/api/v2/piston/execute", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          language: "python",
+          version: "3.10", // Piston uses Python 3.10
+          files: [
+            {
+              name: "main.py",
+              content: code,
+            },
+          ],
+          stdin: input || "", // Pass the standard input here
+        }),
+      });
 
-> Execution complete 🚀`;
+      const result = await response.json();
+      let outputMessage = "";
 
-    io.to(roomId).emit("code_output", output);
+      // Handle Piston API specific responses
+      if (result.message) {
+        outputMessage = `> ❌ API ERROR:\n${result.message}\n`;
+      } else if (result.run) {
+        outputMessage = `> STDOUT:\n${result.run.stdout}\n`;
+        if (result.run.stderr) {
+          outputMessage += `> STDERR:\n${result.run.stderr}\n`;
+        }
+        if (result.run.signal === "SIGKILL") {
+          outputMessage += `> 🚨 TIMEOUT ERROR: Execution took too long or crashed.\n`;
+        }
+      } else {
+        outputMessage = `> ❌ UNKNOWN ERROR:\nCould not parse response.\n`;
+      }
+
+      outputMessage += `\n> Execution complete 🚀`;
+      io.to(roomId).emit("code_output", outputMessage);
+
+    } catch (err) {
+      console.error("Piston API error:", err);
+      io.to(roomId).emit("code_output", `> ❌ NETWORK ERROR: Could not reach the execution engine.\n`);
+    }
   });
-
-  // AI REAL REQUEST
-  socket.on("ai_request", async ({ roomId, code }) => {
-  console.log("AI REQUEST RECEIVED:", code);
-
-  try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-  "You are an AI pair-programming assistant inside a collaborative IDE. Return ONLY a short improved code block that can be inserted as a suggestion block. No markdown, no triple backticks, no explanations, no comments about the code. Only raw code.",
-        },
-        {
-          role: "user",
-          content: code,
-        },
-      ],
-    });
-
-    const suggestion =
-      completion.choices[0].message.content;
-
-    console.log("AI RESPONSE:", suggestion);
-
-    io.to(roomId).emit("ai_suggestion", suggestion);
-  } catch (error) {
-    console.error("AI ERROR:", error);
-  }
-});
 
   // DISCONNECT
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
-
     for (let roomId in rooms) {
-      rooms[roomId].users =
-        rooms[roomId].users.filter(
-          (u) => u.id !== socket.id
-        );
-
-      io.to(roomId).emit(
-        "users_update",
-        rooms[roomId].users
-      );
+      rooms[roomId].users = rooms[roomId].users.filter((u) => u.id !== socket.id);
+      io.to(roomId).emit("users_update", rooms[roomId].users);
     }
   });
 });
 
-server.listen(5000, () => {
-  console.log(
-    "🔥 WebSocket + AI server running on port 5000"
-  );
+// Use the environment port if available (Crucial for Railway!)
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`🔥 API-Powered Backend running on port ${PORT}`);
 });
